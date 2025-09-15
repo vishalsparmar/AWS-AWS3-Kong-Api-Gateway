@@ -1,0 +1,177 @@
+Here's a comprehensive manual test script you can use:
+bash#!/bin/bash
+
+KONG_ADMIN="http://kong-admin:8001"
+KONG_PROXY="http://kong-gateway:8000"
+
+echo "=== Kong Control Plane Health Checks ==="
+
+echo "1. Kong Status:"
+curl -s $KONG_ADMIN/status | jq .
+
+echo -e "\n2. Clustering Status:"
+curl -s $KONG_ADMIN/clustering/status | jq .
+
+echo -e "\n3. Routes Count:"
+curl -s $KONG_ADMIN/routes | jq '.data | length'
+
+echo -e "\n4. Services Count:"
+curl -s $KONG_ADMIN/services | jq '.data | length'
+
+echo -e "\n5. Active Plugins:"
+curl -s $KONG_ADMIN/plugins | jq '.data[].name'
+
+echo -e "\n6. Test Route (replace with your actual route):"
+curl -i $KONG_PROXY/api/health
+
+echo -e "\n=== Upstream Health ==="
+# Get all upstreams and check their health
+curl -s $KONG_ADMIN/upstreams | jq -r '.data[].name' | while read upstream; do
+    echo "Upstream: $upstream"
+    curl -s $KONG_ADMIN/upstreams/$upstream/health | jq .
+done
+Quick Route Validation Commands
+11. Validate Route Configuration
+bash# Test if route matches expected path
+curl -v http://kong-gateway:8000/your-route-path
+
+# Test with different HTTP methods
+curl -X POST http://kong-gateway:8000/your-route-path
+curl -X PUT http://kong-gateway:8000/your-route-path
+curl -X DELETE http://kong-gateway:8000/your-route-path
+12. Debug Route Issues
+bash# Check route with verbose output
+curl -v -H "Host: your-service.com" http://kong-gateway:8000/
+
+# Test with Kong debug headers (if debug plugin enabled)
+curl -H "Kong-Debug: 1" http://kong-gateway:8000/your-route
+Environment-Specific URLs
+Replace these with your actual Kong deployment details:
+
+Admin API: Usually port 8001
+Proxy: Usually port 8000 or 80/443
+Manager (Enterprise): Usually port 8002
+Developer Portal (Enterprise): Usually port 8003
+Status/Metrics: Usually port 8100
+
+Common Response Codes to Expect
+
+200: Success
+404: Route/service not found
+502: Upstream service unavailable
+503: Kong service unavailable
+401/403: Authentication/authorization issues
+
+Would you like me to help you create specific health check commands for your particular Kong setup or routes?RetryClaude does not have the ability to run the code it generates yet.Vwhat's kong admin url as I have control plane in SAASEditIn a Kong hybrid deployment where your control plane is in SaaS (Kong Konnect), you don't have direct access to a local Kong Admin API URL like you would in a self-hosted setup.
+Kong Konnect SaaS Control Plane Access
+1. Kong Konnect Cloud Admin Interface
+https://cloud.konghq.com/
+
+This is your web-based control plane interface
+Manage routes, services, plugins through the GUI
+No direct API access to admin endpoints
+
+2. Kong Konnect API (if available)
+https://us.api.konghq.com/v2/  # US region
+https://eu.api.konghq.com/v2/  # EU region
+Example API calls to Konnect:
+bash# List services (requires Konnect API token)
+curl -H "Authorization: Bearer YOUR_KONNECT_TOKEN" \
+  https://us.api.konghq.com/v2/control-planes/{cp-id}/core-entities/services
+
+# List routes
+curl -H "Authorization: Bearer YOUR_KONNECT_TOKEN" \
+  https://us.api.konghq.com/v2/control-planes/{cp-id}/core-entities/routes
+Data Plane Monitoring URLs (In Your EKS)
+Since you can't access the control plane admin API directly, focus on data plane monitoring:
+1. Kong Data Plane Status Endpoint
+bash# Check data plane status (this runs in your EKS)
+curl -i http://kong-dp-pod:8100/status
+
+# Or via kubectl port-forward
+kubectl port-forward svc/kong-dp-admin 8001:8001 -n kong
+curl -i http://localhost:8001/status
+2. Data Plane Clustering Status
+bash# Check connection to SaaS control plane
+curl -i http://kong-dp-pod:8100/clustering/status
+
+# Via port-forward
+kubectl port-forward svc/kong-dp-admin 8001:8001 -n kong
+curl -i http://localhost:8001/clustering/status
+3. Data Plane Configuration Status
+bash# Check if config is synced from control plane
+curl -i http://kong-dp-pod:8100/config
+
+# Check data plane cluster info
+curl -i http://kong-dp-pod:8100/clustering/data-planes
+Manual Route Testing (Data Plane)
+4. Test Routes Through Data Plane Proxy
+bash# Test your actual routes (this goes through data plane in EKS)
+curl -i http://kong-proxy:8000/your-api-path
+
+# With custom headers
+curl -i -H "Host: api.example.com" http://kong-proxy:8000/
+
+# Test with authentication
+curl -i -H "Authorization: Bearer token" http://kong-proxy:8000/protected
+5. Health Check Your Services
+bash# Test service endpoints through Kong proxy
+curl -i http://kong-proxy:8000/api/v1/health
+curl -i http://kong-proxy:8000/api/v1/status
+Getting Your Kong Data Plane Admin URL
+If you deployed Kong data plane in EKS, you can access it via:
+Option 1: Port Forward
+bash# Forward data plane admin port
+kubectl port-forward svc/kong-dp-admin 8001:8001 -n kong-dp
+
+# Then access locally
+curl -i http://localhost:8001/status
+Option 2: Service/Ingress (if exposed)
+bash# If you have an ingress/service for admin API
+curl -i http://kong-dp-admin.your-domain.com/status
+Option 3: Internal Cluster Access
+bash# From within the cluster
+curl -i http://kong-dp-admin.kong-dp.svc.cluster.local:8001/status
+Key Limitations with SaaS Control Plane
+❌ You CANNOT access:
+
+http://kong-admin:8001/routes (control plane manages this)
+http://kong-admin:8001/services (control plane manages this)
+http://kong-admin:8001/plugins (control plane manages this)
+
+✅ You CAN access:
+
+Data plane status endpoints
+Proxy endpoints for testing routes
+Clustering/sync status
+Metrics endpoints (if enabled)
+
+Recommended Monitoring Approach
+Since your control plane is SaaS, focus on:
+
+Kong Konnect Dashboard - For configuration monitoring
+Data Plane Status APIs - For runtime health
+Proxy Testing - For route functionality
+External Monitoring - Dynatrace, Prometheus, etc.
+
+Sample Data Plane Health Check Script
+bash#!/bin/bash
+
+# Assuming you have port-forward or internal access
+KONG_DP_ADMIN="http://localhost:8001"  # via port-forward
+KONG_PROXY="http://kong-proxy:8000"    # your proxy service
+
+echo "=== Kong Data Plane Health ==="
+
+echo "1. Data Plane Status:"
+curl -s $KONG_DP_ADMIN/status | jq .
+
+echo -e "\n2. Control Plane Connection:"
+curl -s $KONG_DP_ADMIN/clustering/status | jq .
+
+echo -e "\n3. Test Route (replace with actual route):"
+curl -i $KONG_PROXY/api/health
+
+echo -e "\n4. Metrics (if enabled):"
+curl -s http://kong-proxy:8100/metrics | head -20
+Would you like me to help you set up specific monitoring for your Kong data plane in EKS, or show you how to configure the data plane admin access?
