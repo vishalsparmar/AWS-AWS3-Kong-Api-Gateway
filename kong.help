@@ -175,3 +175,188 @@ curl -i $KONG_PROXY/api/health
 echo -e "\n4. Metrics (if enabled):"
 curl -s http://kong-proxy:8100/metrics | head -20
 Would you like me to help you set up specific monitoring for your Kong data plane in EKS, or show you how to configure the data plane admin access?
+
+
+
+
+my kong data-and pod is in sync and connected my internal backend service  are all running and I can hit them directly. but when I hit via kong url it times out.
+This is a classic Kong routing/connectivity issue. Since your data plane is synced and backend services are running, let's troubleshoot the Kong proxy routing systematically.
+Immediate Diagnostic Steps
+1. Check Kong Proxy Logs
+bash
+# Check Kong data plane pod logs
+kubectl logs -f deployment/kong-dp -n kong-dp
+
+# Look for specific errors when making requests
+kubectl logs -f deployment/kong-dp -n kong-dp --tail=50
+2. Verify Route Configuration
+bash
+# Port forward to admin API
+kubectl port-forward svc/kong-dp-admin 8001:8001 -n kong-dp
+
+# Check if routes are properly configured
+curl -s http://localhost:8001/routes | jq '.data[] | {name, paths, methods, service}'
+
+# Check services configuration
+curl -s http://localhost:8001/services | jq '.data[] | {name, host, port, path}'
+3. Test Kong Proxy Direct Access
+bash
+# Test if Kong proxy is responding at all
+kubectl port-forward svc/kong-dp-proxy 8000:8000 -n kong-dp
+
+# Basic Kong status through proxy
+curl -v http://localhost:8000/
+Common Issues & Solutions
+4. Service Host Resolution Issues
+Check if Kong can resolve your backend services:
+bash
+# From Kong pod, test DNS resolution
+kubectl exec -it deployment/kong-dp -n kong-dp -- nslookup your-backend-service.your-namespace.svc.cluster.local
+
+# Test connectivity from Kong pod
+kubectl exec -it deployment/kong-dp -n kong-dp -- curl -v http://your-backend-service.your-namespace.svc.cluster.local:8080/health
+Fix: Ensure your Kong service configuration uses the correct FQDN:
+yaml
+# In Konnect or via decK
+services:
+- name: my-backend-service
+  host: my-backend-service.my-namespace.svc.cluster.local  # Full FQDN
+  port: 8080
+  protocol: http
+5. Network Policy Issues
+Check if network policies are blocking Kong:
+bash
+# Check network policies
+kubectl get networkpolicies -A
+
+# Test from Kong namespace to your service namespace
+kubectl exec -it deployment/kong-dp -n kong-dp -- curl -m 10 http://your-service.your-ns.svc.cluster.local:8080
+6. Service Configuration Mismatch
+Common issues in service configuration:
+bash
+# Check your actual service details
+kubectl get svc your-backend-service -n your-namespace -o yaml
+
+# Common mismatches:
+# - Wrong port (service port vs target port)
+# - Wrong protocol (http vs https)
+# - Wrong service name or namespace
+7. Route Path Matching Issues
+Check if your routes are configured correctly:
+bash
+# Test with specific paths and headers
+curl -v -H "Host: api.example.com" http://localhost:8000/api/v1/health
+
+# Try without path if you have path-based routing
+curl -v http://localhost:8000/your-exact-route-path
+
+# Check if strip_path is causing issues
+curl -s http://localhost:8001/routes | jq '.data[] | {name, paths, strip_path}'
+Debugging Commands
+8. Enable Kong Debug Mode
+yaml
+# In your Kong deployment, add debug logging
+env:
+- name: KONG_LOG_LEVEL
+  value: "debug"
+- name: KONG_PROXY_ACCESS_LOG
+  value: "/dev/stdout"
+- name: KONG_ADMIN_ACCESS_LOG
+  value: "/dev/stdout"
+9. Test Specific Route with Curl
+bash
+# Get your exact route configuration
+curl -s http://localhost:8001/routes/{route-id} | jq .
+
+# Test with exact match
+curl -v -X GET \
+  -H "Host: your-configured-host" \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/your-exact-path
+10. Check Upstream Health
+bash
+# If using upstreams, check their health
+curl -s http://localhost:8001/upstreams | jq '.data[].name'
+
+# Check specific upstream health
+curl -s http://localhost:8001/upstreams/your-upstream/health | jq .
+Step-by-Step Troubleshooting
+Step 1: Verify Basic Connectivity
+bash
+# 1. Can Kong reach your service?
+kubectl exec -it deployment/kong-dp -n kong-dp -- curl -v http://your-service:8080/health
+
+# 2. Is Kong proxy responding?
+curl -v http://kong-proxy-service:8000/
+
+# 3. Are there any timeout errors in logs?
+kubectl logs deployment/kong-dp -n kong-dp | grep -i timeout
+Step 2: Check Route Matching
+bash
+# Get route details and test exact match
+ROUTE_ID=$(curl -s http://localhost:8001/routes | jq -r '.data[0].id')
+curl -s http://localhost:8001/routes/$ROUTE_ID | jq .
+
+# Test with exact route configuration
+curl -v -H "Host: $(curl -s http://localhost:8001/routes/$ROUTE_ID | jq -r '.hosts[0]')" \
+  http://localhost:8000$(curl -s http://localhost:8001/routes/$ROUTE_ID | jq -r '.paths[0]')
+Step 3: Service Resolution Test
+bash
+# Check if the service hostname resolves correctly
+SERVICE_HOST=$(curl -s http://localhost:8001/services | jq -r '.data[0].host')
+kubectl exec -it deployment/kong-dp -n kong-dp -- nslookup $SERVICE_HOST
+Common Configuration Fixes
+Fix 1: Correct Service Host
+yaml
+# Wrong
+host: my-service
+port: 8080
+
+# Right (for services in different namespace)
+host: my-service.my-namespace.svc.cluster.local
+port: 8080
+Fix 2: Route Path Configuration
+yaml
+# If backend expects full path
+strip_path: false
+paths: ["/api/v1"]
+
+# If backend expects path stripped
+strip_path: true
+paths: ["/api/v1"]
+Fix 3: Timeout Settings
+yaml
+# Increase timeouts if services are slow
+connect_timeout: 60000
+write_timeout: 60000
+read_timeout: 60000
+Quick Diagnostic Script
+bash
+#!/bin/bash
+echo "=== Kong Proxy Troubleshooting ==="
+
+# Port forward admin API
+kubectl port-forward svc/kong-dp-admin 8001:8001 -n kong-dp &
+sleep 5
+
+echo "1. Routes configured:"
+curl -s http://localhost:8001/routes | jq -c '.data[] | {name, paths, hosts}'
+
+echo -e "\n2. Services configured:"
+curl -s http://localhost:8001/services | jq -c '.data[] | {name, host, port}'
+
+echo -e "\n3. Testing service connectivity from Kong:"
+SERVICE_HOST=$(curl -s http://localhost:8001/services | jq -r '.data[0].host')
+kubectl exec -it deployment/kong-dp -n kong-dp -- curl -m 5 -o /dev/null -s -w "HTTP: %{http_code}, Time: %{time_total}s\n" http://$SERVICE_HOST:8080/
+
+echo -e "\n4. Recent Kong logs:"
+kubectl logs deployment/kong-dp -n kong-dp --tail=10
+
+# Cleanup
+pkill -f "kubectl port-forward"
+Run this script and share the output. It will help identify where exactly the issue lies.
+What specific error message are you seeing in the Kong logs when the timeout occurs?
+
+
+
+
