@@ -101,3 +101,32 @@ output "control_plane_config" {
   }
 }
 
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+# Example: Storing a simple string parameter
+resource "aws_ssm_parameter" "app_config" {
+  name        = "/myapp/config/db_url" # hierarchical path is recommended
+  description = "Database connection URL for myapp"
+  type        = "String"               # String | StringList | SecureString
+  value       = "postgres://user:pass@host:5432/mydb"
+  overwrite   = true
+  tier        = "Standard"             # Can be "Standard" or "Advanced"
+  tags = {
+    Environment = "dev"
+    Application = "myapp"
+  }
+}
+
+# Example: Storing a secure parameter (encrypted)
+resource "aws_ssm_parameter" "app_secret" {
+  name        = "/myapp/secret/api_key"
+  description = "API Key for external service"
+  type        = "SecureString" # Encrypted using AWS KMS
+  value       = "super-secret-key"
+  key_id      = "alias/aws/ssm" # Optionally, use a custom KMS key ARN
+  overwrite   = true
+}
+
