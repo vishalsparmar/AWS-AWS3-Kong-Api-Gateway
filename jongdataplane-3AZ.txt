@@ -1,0 +1,63 @@
+kong hybrid control plane in SAAS and dataplane in EKS AWS cluster. how to deploy data plane in all 3 AZ subnet so I get pod in each AZ via kong NLB
+ChatGPT said:
+Got it 👍 You want to run Kong Hybrid Mode with:
+Control Plane (CP): hosted in Kong SaaS (Kong Konnect Cloud).
+Data Plane (DP): deployed in your own AWS EKS cluster.
+Goal: Deploy the DP across all 3 Availability Zones (AZs) in your EKS cluster, and expose it through an AWS NLB so that each AZ has dataplane pods and traffic is routed locally for high availability and performance.
+Here’s the breakdown of how you can achieve this:
+1. Ensure EKS Cluster is Multi-AZ
+When you created your EKS cluster, you should have configured subnets across 3 AZs. Verify:
+aws eks describe-cluster --name <cluster-name> --query "cluster.resourcesVpcConfig.subnetIds"
+Make sure those subnets cover all 3 AZs.
+2. Deploy Kong DP with Helm
+You’ll use the official Kong Helm chart in Hybrid DP mode:
+helm repo add kong https://charts.konghq.com
+helm repo update
+
+helm upgrade --install kong-dp kong/kong \
+  --set ingressController.enabled=false \
+  --set proxy.enabled=true \
+  --set proxy.type=LoadBalancer \
+  --set proxy.loadBalancerClass=service.k8s.aws/nlb \
+  --set proxy.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-type"=nlb \
+  --set proxy.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-nlb-target-type"=ip \
+  --set proxy.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-scheme"=internet-facing \
+  --set deployment.daemonset=false \
+  --set hybrid.enabled=true \
+  --set hybrid.role=data_plane \
+  --set hybrid.controlPlane.host=<KONNECT_CP_HOST> \
+  --set hybrid.controlPlane.telemetry.host=<KONNECT_CP_HOST> \
+  --set hybrid.cluster_cert=<PATH_TO_DP_CERT> \
+  --set hybrid.cluster_cert_key=<PATH_TO_DP_CERT_KEY>
+3. Spread Pods Across AZs
+Kubernetes scheduler will usually distribute pods across AZs automatically if you have at least one node per AZ. To force even spreading:
+Add Topology Spread Constraints to your values.yaml:
+
+deployment:
+  kong:
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: kong
+This ensures that Kong DP pods are evenly distributed across AZs.
+4. Configure NLB with Subnets
+By default, AWS LoadBalancer controller will attach subnets automatically. If you want to control them explicitly, annotate the Service:
+proxy:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-az1,subnet-az2,subnet-az3"
+This makes the NLB span all 3 AZs and route traffic locally.
+5. Verify Setup
+Check that Kong DP pods are spread across AZs:
+kubectl get pods -l app.kubernetes.io/name=kong -o wide
+You should see pods scheduled in nodes belonging to different AZs.
+Check the NLB subnets:
+aws elbv2 describe-load-balancers --names <nlb-name>
+It should list all 3 AZ subnets.
+✅ With this setup:
+Kong DP runs in all AZs.
+NLB provides cross-AZ load balancing, preferring local targets.
+If one AZ fails, traffic is routed to the healthy AZs.
+Do you want me to prepare a Helm values.yaml example for a production-ready Kong DP in multi-AZ with these settings baked in?
