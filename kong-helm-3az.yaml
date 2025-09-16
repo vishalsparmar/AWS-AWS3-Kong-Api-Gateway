@@ -1,0 +1,73 @@
+# kong-dp-values.yaml
+
+# Kong Hybrid Mode - Data Plane
+hybrid:
+  enabled: true
+  role: data_plane
+  # Replace with your Konnect control plane details
+  controlPlane:
+    host: <KONNECT_CP_HOST>
+    port: 443
+    telemetry:
+      host: <KONNECT_CP_HOST>
+      port: 443
+  # Mount DP certs as secrets
+  cluster_cert: /etc/secrets/kong-cluster-cert/tls.crt
+  cluster_cert_key: /etc/secrets/kong-cluster-cert/tls.key
+
+# Proxy (Data Plane traffic listener)
+proxy:
+  enabled: true
+  type: LoadBalancer
+  http:
+    enabled: true
+    servicePort: 80
+  tls:
+    enabled: true
+    servicePort: 443
+  loadBalancerClass: service.k8s.aws/nlb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    # Specify subnets explicitly (replace with your AZ subnet IDs)
+    service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-az1,subnet-az2,subnet-az3"
+
+# Disable ingress controller (Konnect handles control plane)
+ingressController:
+  enabled: false
+
+# Deployment configuration
+deployment:
+  kong:
+    replicas: 3
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: kong
+
+# Resource requests/limits (adjust as needed)
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "1"
+    memory: "2Gi"
+
+# Mount secret with DP certs
+env:
+  cluster_cert: /etc/secrets/kong-cluster-cert/tls.crt
+  cluster_cert_key: /etc/secrets/kong-cluster-cert/tls.key
+  cluster_server_name: <KONNECT_CP_HOST>
+extraVolumes:
+  - name: kong-cluster-cert
+    secret:
+      secretName: kong-cluster-cert
+extraVolumeMounts:
+  - name: kong-cluster-cert
+    mountPath: /etc/secrets/kong-cluster-cert
+    readOnly: true
