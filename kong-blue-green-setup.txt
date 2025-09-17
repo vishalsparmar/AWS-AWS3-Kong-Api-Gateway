@@ -1,0 +1,356 @@
+erfect — since you must use NLB only, I’ll give you a fully automated, production-safe blue/green workflow that:
+uses one NLB with one listener (NLB listeners accept a single target group — you swap the listener’s target group to cutover), because NLB does not support weighted target groups like ALB. 
+AWS Documentation
++1
+uses aws-load-balancer-controller + TargetGroupBinding so Kubernetes (not you) registers pod IP targets into the NLB target groups (TG) and only marks pods Ready once the controller confirms the target is healthy (Pod Readiness Gates). That prevents old pods from being removed before new pods are healthy — enabling near-zero-downtime upgrades and pod rebuilds. 
+kubernetes-sigs.github.io
++1
+automates infra (Terraform), K8s (Helm + TargetGroupBinding), and cutover (AWS CLI) in a single CI job (example GitHub Actions).
+ensures 24x7 non-disruptive behavior with readiness probes, pod readiness gates, preStop draining, and careful health-check polling before switching the listener.
+Below I’ll provide:
+Architecture summary + important notes (short)
+Terraform (NLB, two TGs, initial listener) — minimal example
+Kubernetes manifests (Kong Helm values + Service + TargetGroupBinding) for kong-blue and kong-green (including readinessProbe, preStop)
+Cutover script (AWS CLI) with health checks to atomically swap the NLB listener from blue → green
+GitHub Actions skeleton that ties it together
+Safety checklist & recommendations
+If you want I can paste these files into a repo layout (Terraform + manifests + GH Action) — say “repo please” and I’ll output them all in one go. For now I’ll give the full content you can copy.
+1 — Quick architecture & constraints (must-read)
+NLB listener can point to one target group at a time. ALB supports weighted target groups — NLB does not. So blue/green is implemented by atomically swapping listener → target-group ARNs. Expect an atomic swap (no gradual weighting).
+AWS Documentation
++1
+To avoid traffic loss during swap, rely on:
+TargetGroupBinding to register only healthy pod IPs to each target group.
+Pod Readiness Gate support in the AWS Load Balancer Controller so the Controller will set pod readiness to True only once the target is healthy in the NLB TG. This prevents rolling updates from terminating old pods until new pods are healthy.
+kubernetes-sigs.github.io
++1
+Use terminationGracePeriodSeconds and preStop hooks for graceful connections draining.
+2 — Terraform (create NLB + two NLB target groups + listener)
+Replace var.* with your VPC/subnet IDs / security group values. Save as infra/terraform/main.tf.
+provider "aws" {
+  region = var.aws_region
+}
+
+resource "aws_lb" "kong_nlb" {
+  name               = "kong-bluegreen-nlb"
+  internal           = false
+  load_balancer_type = "network"
+  subnets            = var.public_subnets
+  enable_deletion_protection = false
+  # optionally assign an elastic IP per AZ
+}
+
+resource "aws_lb_target_group" "kong_blue_tg" {
+  name        = "kong-blue-tg"
+  port        = var.kong_port # e.g. 80 or 8443
+  protocol    = "TCP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    protocol            = "TCP"   # or HTTP if kong health endpoint is available via HTTP on the target port
+    port                = "traffic-port"
+    interval            = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+  }
+}
+
+resource "aws_lb_target_group" "kong_green_tg" {
+  name        = "kong-green-tg"
+  port        = var.kong_port
+  protocol    = "TCP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    protocol            = "TCP"
+    port                = "traffic-port"
+    interval            = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+  }
+}
+
+resource "aws_lb_listener" "kong_listener" {
+  load_balancer_arn = aws_lb.kong_nlb.arn
+  port              = var.kong_port
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.kong_blue_tg.arn  # initially point to blue
+  }
+}
+
+output "nlb_arn" {
+  value = aws_lb.kong_nlb.arn
+}
+output "listener_arn" {
+  value = aws_lb_listener.kong_listener.arn
+}
+output "blue_tg_arn" {
+  value = aws_lb_target_group.kong_blue_tg.arn
+}
+output "green_tg_arn" {
+  value = aws_lb_target_group.kong_green_tg.arn
+}
+Notes:
+Using target_type = "ip" allows the aws-load-balancer-controller to register pod IPs directly. 
+kubernetes-sigs.github.io
+3 — Kubernetes: Kong Helm values + Service + TargetGroupBinding
+Key points:
+Use readinessProbe that reflects the Kong DP readiness (e.g. /status or local port check).
+Add preStop hook with sleep so in-flight connections drain.
+TargetGroupBinding references the TG ARN (from Terraform outputs). The aws-load-balancer-controller will register pod IPs into the TG only when healthy.
+The controller will inject Pod Readiness Gate for IP mode so the Pod Ready condition won't go True until registered and healthy on the NLB target group. 
+kubernetes-sigs.github.io
++1
+Create these per environment (blue & green). Example files:
+3a) common Helm values (kong-common.yaml)
+replicaCount: 3
+readinessProbe:
+  httpGet:
+    path: /status # replace with an endpoint Kong provides; or use tcpSocket if needed
+    port: 8001     # admin or health port; ensure accessible inside pod
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /status
+    port: 8001
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+podAnnotations:
+  # nothing required here for TargetGroupBinding, controller handles readiness gate injection for ip targetType
+podLabels: {}
+affinity: {}
+Adjust values for the Kong chart you use (chart keys vary; adapt to your chart version).
+3b) Service for Kong proxy (ClusterIP) — kong-blue-svc.yaml and kong-green-svc.yaml
+We will not use Service of type LoadBalancer; instead TargetGroupBinding will reference the serviceRef to map service port → TG.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-blue-proxy
+  namespace: kong
+  labels:
+    app: kong-blue
+spec:
+  ports:
+    - port: 80           # expose the proxy port (cluster-internal)
+      targetPort: 8000   # actual kong proxy container port; adapt if different
+      protocol: TCP
+      name: proxy
+  selector:
+    app: kong-blue
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-green-proxy
+  namespace: kong
+  labels:
+    app: kong-green
+spec:
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: proxy
+  selector:
+    app: kong-green
+  type: ClusterIP
+Important: selector must match the pod labels you set on the Helm chart (podLabels.app=kong-blue etc).
+3c) TargetGroupBinding to register pods into NLB TGs
+Replace TARGET_GROUP_ARN with Terraform outputs. Save as tg-binding-blue.yaml and tg-binding-green.yaml.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: kong-blue-tgb
+  namespace: kong
+spec:
+  targetGroupARN: arn:aws:elasticloadbalancing:...:targetgroup/kong-blue-tg/xxxxxxxx  # from TF output
+  targetType: ip
+  serviceRef:
+    name: kong-blue-proxy
+    port: 80
+  podTemplate:
+    labels:
+      app: kong-blue
+---
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: kong-green-tgb
+  namespace: kong
+spec:
+  targetGroupARN: arn:aws:elasticloadbalancing:...:targetgroup/kong-green-tg/yyyyyyyy
+  targetType: ip
+  serviceRef:
+    name: kong-green-proxy
+    port: 80
+  podTemplate:
+    labels:
+      app: kong-green
+How it behaves:
+The controller will register pod IPs from pods matching the podTemplate.labels and serviceRef port to the specified target group.
+The controller will update the Pod readiness condition only after the target shows Healthy in the NLB TG, preventing premature scaling/termination. 
+kubernetes-sigs.github.io
++1
+4 — Cutover script (atomic swap of listener's target group)
+Because NLB listener has a single forward target group, perform this safe sequence:
+Deploy kong-green + Service + TargetGroupBinding
+Wait until describe-target-health for green_tg shows the expected number of healthy targets
+modify-listener to forward to green_tg (atomic swap)
+Wait a short stabilization window; optionally remove blue resources.
+Example swap-to-green.sh (must have aws CLI configured and listener_arn + TG ARNs available):
+#!/usr/bin/env bash
+set -euo pipefail
+
+LISTENER_ARN="$1"   # from terraform output
+BLUE_TG="$2"
+GREEN_TG="$3"
+EXPECTED_TARGETS="$4" # number of healthy targets (replicaCount * pods per node etc)
+REGION="${AWS_REGION:-eu-west-1}"
+
+# helper: returns healthy count for a TG
+health_count() {
+  local tg="$1"
+  aws elbv2 describe-target-health --target-group-arn "$tg" --region "$REGION" \
+    --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`]|length(@)' --output text
+}
+
+# poll for green TG healthy targets
+echo "Waiting for green TG healthy targets..."
+for i in $(seq 1 60); do
+  c=$(health_count "$GREEN_TG")
+  echo "healthy targets: $c"
+  if [ "$c" -ge "$EXPECTED_TARGETS" ]; then
+    echo "green targets healthy"
+    break
+  fi
+  sleep 5
+  if [ "$i" -eq 60 ]; then
+    echo "timed out waiting for green TG healthy targets" >&2
+    exit 2
+  fi
+done
+
+# atomic swap: modify listener's default action to forward to green TG
+echo "Swapping listener to green target group..."
+aws elbv2 modify-listener \
+  --listener-arn "$LISTENER_ARN" \
+  --default-actions Type=forward,TargetGroupArn="$GREEN_TG" \
+  --region "$REGION"
+
+echo "swap complete - listener now points to green TG"
+Notes:
+modify-listener is an atomic operation. Since the green TG already has healthy targets, traffic should start being routed to green immediately.
+Because Pod Readiness Gate ensures kubectl rollout won’t mark pods Ready until the target is healthy in the TG, the swap should avoid dropped connections between blue pod termination and green readiness. 
+kubernetes-sigs.github.io
+5 — GitHub Actions skeleton (CI automation)
+This job:
+runs Terraform apply to create NLB/TGs/listener
+deploys kong-green (helm), applies TargetGroupBinding
+waits for healthy targets then runs modify-listener to swap
+optionally cleans up blue
+name: kong-nlb-bluegreen
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bluegreen:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: eu-west-1
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure AWS creds
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ secrets.DEPLOY_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Terraform apply
+      working-directory: infra/terraform
+      run: |
+        terraform init
+        terraform apply -auto-approve
+      env:
+        TF_VAR_vpc_id: ${{ secrets.VPC_ID }}
+        TF_VAR_public_subnets: ${{ secrets.PUBLIC_SUBNETS }}
+
+    - name: Get outputs
+      id: tf
+      run: |
+        echo "::set-output name=listener::$(terraform output -raw listener_arn)"
+        echo "::set-output name=blue_tg::$(terraform output -raw blue_tg_arn)"
+        echo "::set-output name=green_tg::$(terraform output -raw green_tg_arn)"
+
+    - name: Deploy kong-green
+      run: |
+        kubectl apply -f k8s/namespace.yaml
+        helm upgrade --install kong-green kong/kong -n kong -f k8s/kong-common.yaml \
+          --set podLabels.app=kong-green
+        kubectl apply -f k8s/kong-green-svc.yaml
+        # replace green tg arn placeholder in tg-binding-green.yaml then apply
+        sed "s|<GREEN_TG_ARN>|${{ steps.tf.outputs.green_tg }}|g" k8s/tg-binding-green.yaml | kubectl apply -f -
+
+    - name: Wait & Swap
+      run: |
+        ./scripts/swap-to-green.sh "${{ steps.tf.outputs.listener }}" "${{ steps.tf.outputs.blue_tg }}" "${{ steps.tf.outputs.green_tg }}" 3
+        # 3 here is expected healthy targets (adjust to your replicaCount)
+    - name: Optional cleanup blue
+      run: |
+        helm uninstall kong-blue -n kong || true
+        # optionally terraform destroy -target aws_lb_target_group.kong_blue_tg
+6 — Safety checklist & recommended settings
+Kong readiness endpoint: ensure /status or equivalent returns success quickly; use that in the readinessProbe and health check (if HTTP health checks are used). For TCP-only traffic you can use TCP health checks but HTTP is usually better.
+Pod Readiness Gate: ensure your aws-load-balancer-controller version supports readiness gate injection (it does for targetType: ip). Enable the controller via recommended install (IRSA + chart). Validate the controller’s webhook is mutating pods with readiness gates. 
+kubernetes-sigs.github.io
++1
+preStop hook (example):
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh","-c","sleep 30"]
+terminationGracePeriodSeconds: 120
+This gives existing connections time to drain while the NLB health is updating.
+Health-check tuning: TG health check interval/threshold small enough to be fast but conservative enough not to flake. Eg. interval 10s, healthy 2.
+Pod anti-affinity & multi-AZ replicas: ensure replicas in multiple AZs to survive AZ failures.
+Monitoring: alert on target unhealthy counts, request errors, and pod readiness gating events.
+Rollback: have a script to swap listener back to blue TG quickly if green shows issues.
+7 — Why this achieves 24x7 no-disruption
+The aws-load-balancer-controller + TargetGroupBinding registers only healthy pod IPs to the TG and does not mark the pod Ready until the target is healthy in the NLB TG (Pod Readiness Gate). This prevents Kubernetes from killing old pods during a rollout before new pods are healthy in the NLB. Atomic modify-listener swaps the NLB listener target group to the green TG once green is healthy — traffic shifts without intermediate broken-backend windows. 
+kubernetes-sigs.github.io
++1
+8 — Limitations & tradeoffs (be explicit)
+No gradual weighted traffic shifting with the NLB (only atomic swap). If you need stepwise traffic shifting (canary percentages) you’d need ALB or external DNS weighting. NLB-only cannot do weighted forwarding. 
+Amazon Web Services, Inc.
++1
+If a target group becomes completely unhealthy after swap, NLB behavior: NLB will try unhealthy targets — so your health checks and pre-swap verification are critical. Monitor and rollback quickly if issues occur. 
+Reddit
+References / docs (cheat sheet)
+NLB target groups & listeners (single TG per listener). 
+AWS Documentation
+AWS Load Balancer Controller — TargetGroupBinding. 
+kubernetes-sigs.github.io
+Pod Readiness Gate (controller injection) — ensures pod not Ready until target healthy. 
+kubernetes-sigs.github.io
++1
+Patterns for TargetGroupBinding / examples. 
+Amazon Web Services, Inc.
+If you want I’ll now:
+generate a complete repo (Terraform + k8s manifests + Helm values + scripts + GitHub Actions) ready to drop into your pipeline, or
+tailor the config to your exact cluster (VPC/subnet IDs, kong port, replica counts, Kong control-plane address), or
+produce a kubectl/helm + aws CLI runbook with exact commands to test a dry-run swap.
+Which would you like next? (I can produce the repo files right now.)
