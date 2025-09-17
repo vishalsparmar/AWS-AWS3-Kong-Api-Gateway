@@ -1,0 +1,1 @@
+<contents from local-run-tf-and-update.sh>

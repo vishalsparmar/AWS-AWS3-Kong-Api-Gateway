@@ -1,0 +1,1 @@
+<contents from post_apply_update_repo.sh>
