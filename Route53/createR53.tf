@@ -56,3 +56,9 @@ resource "aws_iam_role_policy_attachment" "externaldns_attach" {
   role       = aws_iam_role.externaldns.name
   policy_arn = aws_iam_policy.externaldns.arn
 }
+
+resource "aws_ssm_parameter" "db_host" {
+  name  = "/myapp/db/host"
+  type  = "String"
+  value = output.db_host.value
+}
