@@ -1,3 +1,17 @@
+kubectl get application <AppName> -n argocd -o json | `
+  ConvertFrom-Json | `
+  ForEach-Object {
+    if ($_.spec.source.helm.values) {
+      $_.spec.source.helm.values | Out-File argocd-values.yaml -Encoding utf8
+      helm template $_.metadata.name $_.spec.source.path --namespace kong --values argocd-values.yaml
+    } elseif ($_.spec.source.helm.valueFiles) {
+      $files = $_.spec.source.helm.valueFiles -join " --values "
+      helm template $_.metadata.name $_.spec.source.path --namespace kong --values $files
+    } else {
+      helm template $_.metadata.name $_.spec.source.path --namespace kong
+    }
+  }
+
 param(
     [Parameter(Mandatory=$true)]
     [string]$AppName,
