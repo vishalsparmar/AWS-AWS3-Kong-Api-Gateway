@@ -1,0 +1,62 @@
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$AppName,
+
+    [string]$Namespace = "argocd",
+
+    [string]$TempValuesFile = "argocd-values.yaml"
+)
+
+# 1. Fetch Argo CD Application YAML
+Write-Host "🔎 Fetching Argo CD Application $AppName in namespace $Namespace..."
+$appYaml = kubectl get application $AppName -n $Namespace -o yaml
+
+if (-not $appYaml) {
+    Write-Error "❌ Could not fetch Application $AppName"
+    exit 1
+}
+
+# Save full app yaml for reference
+$appYaml | Out-File "$AppName-app.yaml" -Encoding utf8
+Write-Host "✅ Saved full Application manifest to $AppName-app.yaml"
+
+# 2. Extract repoURL, targetRevision, path, and helm values
+$repoURL = ($appYaml | Select-String "repoURL:").ToString().Split(":")[1..10] -join ":" | ForEach-Object { $_.Trim() }
+$revision = ($appYaml | Select-String "targetRevision:").ToString().Split(":")[1].Trim()
+$chartPath = ($appYaml | Select-String "path:").ToString().Split(":")[1].Trim()
+
+# Extract inline Helm values (if present)
+$valuesBlock = $appYaml -split "`n" | Select-String "values:" -Context 0,50 | ForEach-Object { $_.ToString() }
+
+if ($valuesBlock) {
+    # Keep everything after 'values:' as raw YAML
+    $valuesLines = $appYaml -split "`n"
+    $startIndex = ($valuesLines | Select-String "values:").LineNumber
+    $helmValues = $valuesLines[$startIndex..($valuesLines.Length-1)] -join "`n"
+    $helmValues = $helmValues -replace "^\s*values:\s*\|?\s*", ""
+
+    $helmValues | Out-File $TempValuesFile -Encoding utf8
+    Write-Host "✅ Extracted inline Helm values to $TempValuesFile"
+} else {
+    Write-Host "ℹ️ No inline Helm values found. Check valueFiles section in $AppName-app.yaml"
+}
+
+# 3. Clone repo if not already present
+$repoName = Split-Path $repoURL -LeafBase
+if (-not (Test-Path $repoName)) {
+    Write-Host "⬇️ Cloning repo $repoURL ..."
+    git clone $repoURL
+}
+Set-Location $repoName
+git fetch
+git checkout $revision
+
+Write-Host "✅ Checked out repo at revision $revision"
+
+# 4. Run helm template
+Write-Host "🚀 Running helm template ..."
+if (Test-Path "..\$TempValuesFile") {
+    helm template $AppName $chartPath --namespace kong --values "..\$TempValuesFile"
+} else {
+    helm template $AppName $chartPath --namespace kong
+}
