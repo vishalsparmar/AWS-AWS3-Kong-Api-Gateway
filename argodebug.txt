@@ -1,15 +1,581 @@
-# Extract the Helm values from ArgoCD app
-kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.helm.values}' > extracted-values.yaml
+# PowerShell kubectl Debugging Guide
 
-# Get chart info
-CHART_REPO=$(kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.repoURL}')
-CHART_PATH=$(kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.path}')
-CHART_VERSION=$(kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.targetRevision}')
+A comprehensive guide for debugging Kubernetes and ArgoCD deployments using PowerShell equivalents to grep commands.
 
-# Generate manifests manually (if using Helm chart)
-helm template <release-name> <chart> -f extracted-values.yaml --debug > generated-manifests.yaml
+## Table of Contents
+- [Basic PowerShell Pattern Matching](#basic-powershell-pattern-matching)
+- [Common kubectl + grep Equivalents](#common-kubectl--grep-equivalents)
+- [Advanced PowerShell Filtering](#advanced-powershell-filtering)
+- [ArgoCD Specific Debugging](#argocd-specific-debugging)
+- [Complex PowerShell Filtering](#complex-powershell-filtering)
+- [Reusable PowerShell Functions](#reusable-powershell-functions)
+- [Using Where-Object for Complex Filtering](#using-where-object-for-complex-filtering)
+- [ArgoCD Deployment Debugging Commands](#argocd-deployment-debugging-commands)
+- [Export and Analysis](#export-and-analysis)
+- [Real-time Monitoring](#real-time-monitoring)
+- [Helm Values and Manifest Debugging](#helm-values-and-manifest-debugging)
+- [Cross-Account Resource Debugging](#cross-account-resource-debugging)
+- [Quick Reference](#quick-reference)
 
-# Or if from Git repo
-git clone $CHART_REPO temp-repo
-cd temp-repo && git checkout $CHART_VERSION
-helm template <release-name> ./$CHART_PATH -f ../extracted-values.yaml --debug > ../generated-manifests.yaml
+---
+
+## Basic PowerShell Pattern Matching
+
+```powershell
+# Instead of: kubectl logs pod-name | grep "error"
+kubectl logs pod-name | Select-String "error"
+
+# Case insensitive (default in PowerShell)
+kubectl logs pod-name | Select-String "error" -CaseSensitive:$false
+
+# Multiple patterns
+kubectl logs pod-name | Select-String "error|warning|fail"
+
+# Exclude patterns (like grep -v)
+kubectl logs pod-name | Where-Object { $_ -notmatch "debug|info" }
+```
+
+## Common kubectl + grep Equivalents
+
+```powershell
+# Get pod events with specific pattern
+kubectl get events | Select-String "Failed"
+
+# Describe pod and filter for specific info
+kubectl describe pod <pod-name> | Select-String "Events:" -Context 0,10
+
+# Get application status with filtering
+kubectl get application <app-name> -n argocd -o yaml | Select-String "sync|health"
+
+# Filter logs for specific patterns
+kubectl logs deployment/argocd-application-controller -n argocd | Select-String "yaml|parse|unmarshal"
+
+# Get pod status and filter
+kubectl get pods -A | Select-String "CrashLoopBackOff|Error|Pending"
+
+# Filter kubectl describe output
+kubectl describe nodes | Select-String "Capacity:|Allocatable:" -Context 1,3
+```
+
+## Advanced PowerShell Filtering
+
+```powershell
+# Get lines before and after match (like grep -A -B)
+kubectl logs pod-name | Select-String "error" -Context 5,5  # 5 lines before, 5 after
+
+# Get only matching text (not whole line)
+kubectl logs pod-name | Select-String "error" | ForEach-Object { $_.Matches.Value }
+
+# Count matches
+kubectl logs pod-name | Select-String "error" | Measure-Object | Select-Object Count
+
+# Get unique matches
+kubectl logs pod-name | Select-String "error" | Sort-Object Line -Unique
+
+# Filter by line number
+kubectl logs pod-name | Select-String "error" | Where-Object { $_.LineNumber -gt 100 }
+
+# Multiple patterns with different actions
+kubectl logs pod-name | ForEach-Object {
+    switch -Regex ($_) {
+        "ERROR" { Write-Host $_ -ForegroundColor Red }
+        "WARN" { Write-Host $_ -ForegroundColor Yellow }
+        "INFO" { Write-Host $_ -ForegroundColor Green }
+        default { Write-Host $_ }
+    }
+}
+```
+
+## ArgoCD Specific Debugging
+
+```powershell
+# Check ArgoCD controller logs for app-specific errors
+kubectl logs deployment/argocd-application-controller -n argocd | Select-String "<app-name>" | Select-String "error|fail"
+
+# Get YAML parsing errors
+kubectl logs deployment/argocd-repo-server -n argocd | Select-String "yaml|unmarshal|parse" -Context 2,2
+
+# Filter application status
+kubectl get application <app-name> -n argocd -o yaml | Select-String "status:|sync:|health:"
+
+# Get events with timestamps
+kubectl get events -n <namespace> --sort-by='.lastTimestamp' | Select-String "Failed|Error"
+
+# Check ArgoCD sync operations
+kubectl get application <app-name> -n argocd -o yaml | Select-String "operationState:" -Context 0,20
+
+# Get ArgoCD application conditions
+kubectl get application <app-name> -n argocd -o jsonpath='{.status.conditions}' | ConvertFrom-Json | Format-Table
+
+# Check ArgoCD server logs for authentication issues
+kubectl logs deployment/argocd-server -n argocd | Select-String "auth|login|token" -Context 1,1
+```
+
+## Complex PowerShell Filtering
+
+```powershell
+# Filter and format output
+kubectl get pods -A | Select-String "Running" | ForEach-Object { 
+    $fields = $_ -split '\s+'
+    "$($fields[0]) - $($fields[1]) - $($fields[3])"
+}
+
+# Get specific fields from kubectl output
+kubectl get pods -o wide | Select-String "app-name" | ForEach-Object {
+    ($_ -split '\s+')[0,2,6]  # Get name, status, node
+}
+
+# Multiple filters with pipeline
+kubectl logs <pod-name> | 
+    Select-String "error|warning" | 
+    Select-String "yaml" | 
+    Select-Object -First 10
+
+# Complex filtering with custom objects
+kubectl get pods -o json | ConvertFrom-Json | 
+    Select-Object -ExpandProperty items |
+    Where-Object { $_.status.phase -ne "Running" } |
+    Select-Object @{n="Name";e={$_.metadata.name}}, @{n="Status";e={$_.status.phase}}, @{n="Restarts";e={$_.status.containerStatuses[0].restartCount}}
+```
+
+## Reusable PowerShell Functions
+
+```powershell
+# Create reusable functions
+function Get-PodLogs {
+    param(
+        [Parameter(Mandatory=$true)]$PodName, 
+        [Parameter(Mandatory=$true)]$Pattern,
+        [string]$Namespace = "default"
+    )
+    
+    if ($Namespace -eq "default") {
+        kubectl logs $PodName | Select-String $Pattern
+    } else {
+        kubectl logs $PodName -n $Namespace | Select-String $Pattern
+    }
+}
+
+function Get-AppStatus {
+    param(
+        [Parameter(Mandatory=$true)]$AppName,
+        [string]$Namespace = "argocd"
+    )
+    kubectl get application $AppName -n $Namespace -o yaml | Select-String "sync|health|status"
+}
+
+function Get-PodErrors {
+    param(
+        [Parameter(Mandatory=$true)]$PodName,
+        [string]$Namespace = "default",
+        [int]$Context = 3
+    )
+    
+    $cmd = if ($Namespace -eq "default") { 
+        "kubectl logs $PodName" 
+    } else { 
+        "kubectl logs $PodName -n $Namespace" 
+    }
+    
+    Invoke-Expression $cmd | Select-String "error|fail|exception" -Context $Context,$Context
+}
+
+function Get-ArgoAppHealth {
+    param([Parameter(Mandatory=$true)]$AppName)
+    
+    $app = kubectl get application $AppName -n argocd -o json | ConvertFrom-Json
+    [PSCustomObject]@{
+        Name = $app.metadata.name
+        Health = $app.status.health.status
+        Sync = $app.status.sync.status
+        Message = $app.status.conditions[0].message
+    }
+}
+
+# Usage examples
+Get-PodLogs "my-pod" "error|fail" "production"
+Get-AppStatus "my-app"
+Get-PodErrors "failing-pod" "kube-system" 5
+Get-ArgoAppHealth "my-application"
+```
+
+## Using Where-Object for Complex Filtering
+
+```powershell
+# Filter based on multiple conditions
+kubectl get pods -o json | ConvertFrom-Json | 
+    Where-Object { $_.items.status.phase -eq "Failed" } |
+    Select-Object -ExpandProperty items |
+    Select-Object metadata.name, status.phase
+
+# Filter events by age
+kubectl get events -o json | ConvertFrom-Json |
+    Where-Object { 
+        [datetime]$_.items.lastTimestamp -gt (Get-Date).AddMinutes(-30) 
+    }
+
+# Filter pods by resource usage
+kubectl top pods --all-namespaces | ConvertFrom-Csv -Delimiter ' ' | 
+    Where-Object { [int]($_.CPU -replace 'm','') -gt 100 }
+
+# Complex application filtering
+kubectl get applications -n argocd -o json | ConvertFrom-Json |
+    Select-Object -ExpandProperty items |
+    Where-Object { 
+        $_.status.sync.status -ne "Synced" -or 
+        $_.status.health.status -ne "Healthy" 
+    } |
+    Select-Object metadata.name, status.sync.status, status.health.status
+```
+
+## ArgoCD Deployment Debugging Commands
+
+```powershell
+# Get sync errors from ArgoCD app
+kubectl get application <app-name> -n argocd -o yaml | 
+    Select-String "message:|reason:" -Context 1,1
+
+# Get manifest generation errors
+kubectl logs deployment/argocd-repo-server -n argocd | 
+    Select-String "<app-name>" | 
+    Select-String "error|fail|invalid"
+
+# Get application controller errors
+kubectl logs deployment/argocd-application-controller -n argocd --tail=100 | 
+    Select-String "yaml|parse|template" | 
+    Select-String "error"
+
+# Debug Helm values issues
+function Debug-ArgoHelmValues {
+    param([Parameter(Mandatory=$true)]$AppName)
+    
+    Write-Host "=== Application Source ===" -ForegroundColor Green
+    kubectl get application $AppName -n argocd -o jsonpath='{.spec.source}' | ConvertFrom-Json | Format-List
+
+    Write-Host "`n=== Helm Values ===" -ForegroundColor Green
+    $values = kubectl get application $AppName -n argocd -o jsonpath='{.spec.source.helm.values}'
+    if ($values) { $values | ConvertFrom-Yaml } else { "No inline values found" }
+
+    Write-Host "`n=== Helm Parameters ===" -ForegroundColor Green
+    kubectl get application $AppName -n argocd -o jsonpath='{.spec.source.helm.parameters}' | ConvertFrom-Json | Format-Table
+
+    Write-Host "`n=== Value Files ===" -ForegroundColor Green
+    kubectl get application $AppName -n argocd -o jsonpath='{.spec.source.helm.valueFiles[*]}'
+
+    Write-Host "`n=== Sync Status ===" -ForegroundColor Green
+    kubectl get application $AppName -n argocd -o jsonpath='{.status.sync}' | ConvertFrom-Json | Format-List
+
+    Write-Host "`n=== Health Status ===" -ForegroundColor Green
+    kubectl get application $AppName -n argocd -o jsonpath='{.status.health}' | ConvertFrom-Json | Format-List
+}
+
+# Get failing manifest and validate YAML
+function Debug-FailingManifest {
+    param([Parameter(Mandatory=$true)]$AppName)
+    
+    Write-Host "Getting manifests..." -ForegroundColor Yellow
+    $manifests = argocd app manifests $AppName
+    
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    $manifests | Out-File -FilePath $tempFile
+    
+    Write-Host "Checking YAML validity..." -ForegroundColor Yellow
+    try {
+        $manifests | ConvertFrom-Yaml | Out-Null
+        Write-Host "YAML is valid" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "YAML validation failed:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        
+        # Split and check individual resources
+        $resources = $manifests -split '---'
+        for ($i = 0; $i -lt $resources.Length; $i++) {
+            if ($resources[$i].Trim()) {
+                try {
+                    $resources[$i] | ConvertFrom-Yaml | Out-Null
+                }
+                catch {
+                    Write-Host "ERROR in resource $($i+1):" -ForegroundColor Red
+                    Write-Host $resources[$i] -ForegroundColor White
+                    Write-Host "---" -ForegroundColor Red
+                }
+            }
+        }
+    }
+    finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+}
+```
+
+## Export and Analysis
+
+```powershell
+# Save filtered output to file
+kubectl logs <pod-name> | Select-String "error" | Out-File -FilePath "errors.txt"
+
+# Get statistics
+$errors = kubectl logs <pod-name> | Select-String "error"
+Write-Host "Found $($errors.Count) error lines"
+$errors | Group-Object Line | Sort-Object Count -Descending | Select-Object -First 5
+
+# Export to CSV for analysis
+kubectl get pods -A | ConvertFrom-String | 
+    Select-Object @{n="Namespace";e={$_.P1}}, @{n="Name";e={$_.P2}}, @{n="Ready";e={$_.P3}}, @{n="Status";e={$_.P4}} |
+    Export-Csv -Path "pod-status.csv" -NoTypeInformation
+
+# Generate summary report
+function Generate-ClusterReport {
+    $report = @{
+        Timestamp = Get-Date
+        FailedPods = (kubectl get pods -A | Select-String "Error|CrashLoop|Failed").Count
+        PendingPods = (kubectl get pods -A | Select-String "Pending").Count
+        UnhealthyApps = (kubectl get applications -n argocd -o json | ConvertFrom-Json).items | 
+            Where-Object { $_.status.health.status -ne "Healthy" } | Measure-Object | Select-Object -ExpandProperty Count
+        OutOfSyncApps = (kubectl get applications -n argocd -o json | ConvertFrom-Json).items | 
+            Where-Object { $_.status.sync.status -ne "Synced" } | Measure-Object | Select-Object -ExpandProperty Count
+    }
+    
+    $report | ConvertTo-Json | Out-File -FilePath "cluster-report-$(Get-Date -Format 'yyyyMMdd-HHmm').json"
+    $report
+}
+```
+
+## Real-time Monitoring
+
+```powershell
+# Monitor logs in real-time
+kubectl logs -f <pod-name> | ForEach-Object {
+    switch -Regex ($_) {
+        "error|fail|exception" { Write-Host $_ -ForegroundColor Red }
+        "warning|warn" { Write-Host $_ -ForegroundColor Yellow }
+        "info|debug" { Write-Host $_ -ForegroundColor Green }
+        default { Write-Host $_ }
+    }
+}
+
+# Monitor multiple pods
+function Monitor-Pods {
+    param([string[]]$PodNames, [string]$Namespace = "default")
+    
+    $jobs = @()
+    foreach ($pod in $PodNames) {
+        $jobs += Start-Job -ScriptBlock {
+            param($podName, $ns)
+            kubectl logs -f $podName -n $ns | ForEach-Object {
+                "[$podName] $_"
+            }
+        } -ArgumentList $pod, $Namespace
+    }
+    
+    try {
+        while ($true) {
+            $jobs | Receive-Job | ForEach-Object {
+                switch -Regex ($_) {
+                    "error|fail" { Write-Host $_ -ForegroundColor Red }
+                    "warning" { Write-Host $_ -ForegroundColor Yellow }
+                    default { Write-Host $_ }
+                }
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+    finally {
+        $jobs | Stop-Job
+        $jobs | Remove-Job
+    }
+}
+
+# Real-time ArgoCD app monitoring
+function Monitor-ArgoApps {
+    while ($true) {
+        Clear-Host
+        Write-Host "ArgoCD Applications Status - $(Get-Date)" -ForegroundColor Cyan
+        Write-Host "=" * 50 -ForegroundColor Cyan
+        
+        kubectl get applications -n argocd -o json | ConvertFrom-Json |
+            Select-Object -ExpandProperty items |
+            Select-Object @{n="Name";e={$_.metadata.name}}, 
+                         @{n="Health";e={$_.status.health.status}}, 
+                         @{n="Sync";e={$_.status.sync.status}} |
+            Format-Table -AutoSize
+        
+        Start-Sleep -Seconds 30
+    }
+}
+```
+
+## Helm Values and Manifest Debugging
+
+```powershell
+# Extract and validate Helm values
+function Get-HelmValues {
+    param([Parameter(Mandatory=$true)]$AppName)
+    
+    $values = kubectl get application $AppName -n argocd -o jsonpath='{.spec.source.helm.values}'
+    if ($values) {
+        try {
+            $values | ConvertFrom-Yaml
+        }
+        catch {
+            Write-Host "Invalid YAML in values:" -ForegroundColor Red
+            Write-Host $values -ForegroundColor White
+        }
+    } else {
+        Write-Host "No inline values found" -ForegroundColor Yellow
+    }
+}
+
+# Test Helm template locally
+function Test-HelmTemplate {
+    param(
+        [Parameter(Mandatory=$true)]$AppName,
+        [Parameter(Mandatory=$true)]$ChartPath
+    )
+    
+    # Extract values from ArgoCD
+    $values = kubectl get application $AppName -n argocd -o jsonpath='{.spec.source.helm.values}'
+    $values | Out-File -FilePath "extracted-values.yaml"
+    
+    # Run helm template
+    try {
+        helm template test-release $ChartPath -f extracted-values.yaml --debug --dry-run
+    }
+    catch {
+        Write-Host "Helm template failed:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
+    finally {
+        Remove-Item "extracted-values.yaml" -ErrorAction SilentlyContinue
+    }
+}
+
+# Get and validate manifests
+function Get-ValidatedManifests {
+    param([Parameter(Mandatory=$true)]$AppName)
+    
+    $manifests = argocd app manifests $AppName
+    
+    # Split into individual resources and validate each
+    $resources = ($manifests -split '---').Where({$_.Trim()})
+    
+    for ($i = 0; $i -lt $resources.Count; $i++) {
+        Write-Host "Validating resource $($i + 1)..." -ForegroundColor Yellow
+        try {
+            $resource = $resources[$i] | ConvertFrom-Yaml
+            Write-Host "✓ Valid: $($resource.kind)/$($resource.metadata.name)" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "✗ Invalid resource $($i + 1):" -ForegroundColor Red
+            Write-Host $resources[$i] -ForegroundColor White
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "---" -ForegroundColor Red
+        }
+    }
+}
+```
+
+## Cross-Account Resource Debugging
+
+```powershell
+# Debug cross-account Terraform/kubectl access
+function Test-CrossAccountAccess {
+    param(
+        [Parameter(Mandatory=$true)]$RoleArn,
+        [Parameter(Mandatory=$true)]$AccountId
+    )
+    
+    Write-Host "Testing cross-account access to $AccountId..." -ForegroundColor Yellow
+    
+    # Test AWS CLI access
+    try {
+        aws sts assume-role --role-arn $RoleArn --role-session-name "test-session" --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text
+        Write-Host "✓ STS assume role successful" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ STS assume role failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    
+    # Test kubectl access if available
+    try {
+        kubectl get namespaces | Select-String "kube-system"
+        Write-Host "✓ kubectl access successful" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ kubectl access failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Debug VPC endpoints in other account
+function Get-CrossAccountVPCEndpoints {
+    param(
+        [Parameter(Mandatory=$true)]$VpcId,
+        [string]$Profile = "other-account"
+    )
+    
+    Write-Host "Getting VPC endpoints from other account..." -ForegroundColor Yellow
+    
+    try {
+        aws ec2 describe-vpc-endpoints --profile $Profile --filters "Name=vpc-id,Values=$VpcId" --query 'VpcEndpoints[*].[VpcEndpointId,ServiceName,State]' --output table
+    }
+    catch {
+        Write-Host "Error accessing other account: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+```
+
+## Quick Reference
+
+### PowerShell vs grep Equivalents
+
+| grep Command | PowerShell Equivalent |
+|--------------|----------------------|
+| `grep -i pattern` | `Select-String "pattern"` (case-insensitive by default) |
+| `grep -A 5 -B 5 pattern` | `Select-String "pattern" -Context 5,5` |
+| `grep -c pattern` | `Select-String "pattern" | Measure-Object | Select Count` |
+| `grep -v pattern` | `Where-Object { $_ -notmatch "pattern" }` |
+| `grep -E "pattern1|pattern2"` | `Select-String "pattern1|pattern2"` |
+| `grep -n pattern` | `Select-String "pattern" | Select LineNumber,Line` |
+| `grep -l pattern file*` | `Get-ChildItem file* | Select-String "pattern" | Select Filename` |
+| `grep -r pattern dir/` | `Get-ChildItem -Recurse dir/ | Select-String "pattern"` |
+
+### Most Common Debugging Commands
+
+```powershell
+# Pod debugging
+kubectl logs <pod-name> | Select-String "error|fail|exception" -Context 3,3
+kubectl describe pod <pod-name> | Select-String "Events:" -Context 0,20
+kubectl get events | Select-String "Failed|Error" | Sort-Object
+
+# ArgoCD debugging
+kubectl logs deployment/argocd-application-controller -n argocd | Select-String "<app-name>"
+kubectl get application <app-name> -n argocd -o yaml | Select-String "sync|health|conditions"
+argocd app manifests <app-name> | Select-String "error" -Context 5,5
+
+# Real-time monitoring
+kubectl logs -f <pod-name> | Where-Object { $_ -match "error|warning" }
+
+# Resource analysis
+kubectl get pods -A | Select-String "CrashLoop|Error|Pending"
+kubectl top pods | ConvertFrom-String | Where-Object { [int]$_.P2.Replace('m','') -gt 100 }
+```
+
+### Useful Aliases
+
+```powershell
+# Add to your PowerShell profile
+Set-Alias k kubectl
+function kgp { kubectl get pods @args }
+function kgs { kubectl get svc @args }
+function kdp { kubectl describe pod @args }
+function klog { kubectl logs @args }
+function kapp { kubectl get application @args -n argocd }
+
+# Usage
+k get pods | Select-String "Running"
+klog my-pod | Select-String "error"
+kapp | Select-String "OutOfSync"
+```
+
+This comprehensive guide covers all the essential PowerShell equivalents for kubectl and grep debugging commands, specifically tailored for Kubernetes and ArgoCD troubleshooting.
