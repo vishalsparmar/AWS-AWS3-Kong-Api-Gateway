@@ -1,0 +1,15 @@
+# Extract the Helm values from ArgoCD app
+kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.helm.values}' > extracted-values.yaml
+
+# Get chart info
+CHART_REPO=$(kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.repoURL}')
+CHART_PATH=$(kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.path}')
+CHART_VERSION=$(kubectl get application <app-name> -n argocd -o jsonpath='{.spec.source.targetRevision}')
+
+# Generate manifests manually (if using Helm chart)
+helm template <release-name> <chart> -f extracted-values.yaml --debug > generated-manifests.yaml
+
+# Or if from Git repo
+git clone $CHART_REPO temp-repo
+cd temp-repo && git checkout $CHART_VERSION
+helm template <release-name> ./$CHART_PATH -f ../extracted-values.yaml --debug > ../generated-manifests.yaml
