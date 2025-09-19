@@ -12,6 +12,16 @@ kubectl get application <AppName> -n argocd -o json | `
     }
   }
 
+
+helm repo add kong https://charts.konghq.com
+helm repo update
+
+helm template kong kong/kong `
+  --namespace kong `
+  --values values/eks.yaml `
+  --set proxy.type=LoadBalancer
+
+
 param(
     [Parameter(Mandatory=$true)]
     [string]$AppName,
