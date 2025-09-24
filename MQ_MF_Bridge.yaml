@@ -1,3 +1,193 @@
+# Complete MQ Bridge Setup for EKS to Mainframe Connection
+---
+# ConfigMap with MQ Bridge Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mq-bridge-config
+  namespace: your-mq-namespace
+data:
+  bridge.mqsc: |
+    * Define connection to mainframe MQ
+    DEFINE CHANNEL('TO.MAINFRAME') CHLTYPE(SDR) +
+           CONNAME('MAINFRAME_IP(1414)') +
+           XMITQ('MAINFRAME.XMIT') +
+           DESCR('Channel to Mainframe MQ')
+    
+    * Define transmission queue
+    DEFINE QLOCAL('MAINFRAME.XMIT') +
+           USAGE(XMITQ) +
+           DESCR('Transmission queue to mainframe')
+    
+    * Define remote queue definition
+    DEFINE QREMOTE('MAINFRAME.REMOTE.QUEUE') +
+           RNAME('TARGET.QUEUE.ON.MAINFRAME') +
+           RQMNAME('MAINFRAME.QMGR') +
+           XMITQ('MAINFRAME.XMIT') +
+           DESCR('Remote queue on mainframe')
+    
+    * Define receiver channel (for bidirectional communication)
+    DEFINE CHANNEL('FROM.MAINFRAME') CHLTYPE(RCVR) +
+           DESCR('Receiver channel from mainframe')
+    
+    * Start the sender channel
+    START CHANNEL('TO.MAINFRAME')
+  
+  qm.ini: |
+    Service:
+      Name=AuthorizationService
+      Entrypoints=14
+    
+    # Bridge specific configuration
+    Bridge:
+      QueueManagerName=YOUR_EKS_QMGR
+      MainframeConnection=MAINFRAME_IP:1414
+
+---
+# Secret for MQ credentials (if needed)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mq-bridge-credentials
+  namespace: your-mq-namespace
+type: Opaque
+data:
+  # Base64 encoded credentials - replace with actual values
+  username: bXF1c2Vy  # mquser
+  password: bXFwYXNz  # mqpass
+
+---
+# MQ Bridge Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mq-bridge-deployment
+  namespace: your-mq-namespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mq-bridge
+  template:
+    metadata:
+      labels:
+        app: mq-bridge
+    spec:
+      containers:
+      - name: mq-bridge
+        image: icr.io/ibm-messaging/mq:latest
+        env:
+        - name: LICENSE
+          value: accept
+        - name: MQ_QMGR_NAME
+          value: YOUR_EKS_QMGR
+        - name: MQ_APP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mq-bridge-credentials
+              key: password
+        # Environment variables for mainframe connection
+        - name: MAINFRAME_IP
+          value: "YOUR_MAINFRAME_IP"
+        - name: MAINFRAME_PORT
+          value: "1414"
+        - name: MAINFRAME_QMGR
+          value: "MAINFRAME.QMGR"
+        ports:
+        - containerPort: 1414
+          name: mq-port
+        - containerPort: 9443
+          name: web-console
+        volumeMounts:
+        - name: bridge-config
+          mountPath: /etc/mqm/bridge.mqsc
+          subPath: bridge.mqsc
+        - name: qm-ini-config
+          mountPath: /var/mqm/qmgrs/YOUR_EKS_QMGR/qm.ini
+          subPath: qm.ini
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      volumes:
+      - name: bridge-config
+        configMap:
+          name: mq-bridge-config
+      - name: qm-ini-config
+        configMap:
+          name: mq-bridge-config
+
+---
+# Internal Service for MQ Bridge
+apiVersion: v1
+kind: Service
+metadata:
+  name: mq-bridge-service
+  namespace: your-mq-namespace
+spec:
+  selector:
+    app: mq-bridge
+  ports:
+  - name: mq-port
+    port: 1414
+    targetPort: 1414
+  - name: web-console
+    port: 9443
+    targetPort: 9443
+  type: ClusterIP
+
+---
+# External Load Balancer Service (if needed for external access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mq-bridge-external
+  namespace: your-mq-namespace
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: mq-bridge
+  ports:
+  - name: mq-port
+    port: 1414
+    targetPort: 1414
+    protocol: TCP
+
+---
+# Network Policy to allow egress to mainframe
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mq-bridge-egress
+  namespace: your-mq-namespace
+spec:
+  podSelector:
+    matchLabels:
+      app: mq-bridge
+  policyTypes:
+  - Egress
+  egress:
+  - to: []  # Allow all egress for MQ bridge
+    ports:
+    - protocol: TCP
+      port: 1414  # MQ port
+    - protocol: TCP
+      port: 1415  # Additional MQ port if needed
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53   # DNS
+    - protocol: UDP
+      port: 53   # DNS
+
+---
+# Job to set up MQ Bridge configuration
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -42,3 +232,18 @@ spec:
       - name: bridge-config
         configMap:
           name: mq-bridge-config
+
+---
+# Optional: PersistentVolumeClaim for MQ data persistence
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mq-bridge-pvc
+  namespace: your-mq-namespace
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp2  # Change to your storage class
+  resources:
+    requests:
+      storage: 10Gi
