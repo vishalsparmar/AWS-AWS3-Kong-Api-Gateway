@@ -39,3 +39,39 @@ Mainframe → EKS: Sender channel "TO.EKS.QM"
 EKS → Mainframe: Receiver channel "TO.EKS.QM"
 
 Would you like me to provide specific MQSC commands for creating these objects?RetryClaude can make mistakes. Please double-check responses.
+
+ *********************************************For EKS Deployment: *********************************************
+ ********************************************* *********************************************
+Service Exposure: You'll need to expose your MQ service externally using either:
+
+LoadBalancer service type
+NodePort service
+Ingress with TCP passthrough
+
+
+Connection Name: Update the mainframe's CONNAME parameter with the actual external IP/hostname of your EKS MQ service
+Network Policy: Ensure your EKS cluster allows inbound traffic on port 1414
+
+For Mainframe:
+
+Network Connectivity: Ensure the mainframe can reach your EKS cluster's external IP
+User Permissions: Verify MCAUSER has appropriate permissions
+Connection Name: Use the actual hostname/IP of the mainframe system
+
+ ********************************************* ********************************************* ********************************************* *********************************************
+  ********************************************* ***************************************mainframe testing ****** ********************************************* *********************************************
+  Testing the Connection:
+mqsc# Test message flow EKS → Mainframe
+PUT MAINFRAME.APP.QUEUE
+Test message from EKS
+
+# Test message flow Mainframe → EKS  
+PUT EKS.APP.QUEUE
+Test message from Mainframe
+Troubleshooting Commands:
+mqsc# Check channel events
+DISPLAY CHSTATUS(channelname) ALL
+# View channel errors
+DISPLAY QSTATUS(SYSTEM.CHANNEL.INITQ)
+
+
