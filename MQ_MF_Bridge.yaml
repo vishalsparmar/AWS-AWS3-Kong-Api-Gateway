@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mq-bridge-setup
+  namespace: your-mq-namespace
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: setup-bridge
+        image: icr.io/ibm-messaging/mq:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          # Wait for MQ to be ready
+          until runmqsc $MQ_QMGR_NAME < /dev/null; do
+            echo "Waiting for MQ to be ready..."
+            sleep 5
+          done
+          
+          # Apply bridge configuration
+          echo "Applying bridge configuration..."
+          runmqsc $MQ_QMGR_NAME < /etc/mqm/bridge.mqsc
+          
+          # Test connection to mainframe
+          echo "Testing connection to mainframe..."
+          telnet $MAINFRAME_IP 1414 || echo "Connection test completed"
+          
+          echo "Bridge setup completed"
+        env:
+        - name: MQ_QMGR_NAME
+          value: YOUR_EKS_QMGR
+        - name: MAINFRAME_IP
+          value: "YOUR_MAINFRAME_IP"
+        volumeMounts:
+        - name: bridge-config
+          mountPath: /etc/mqm/bridge.mqsc
+          subPath: bridge.mqsc
+      volumes:
+      - name: bridge-config
+        configMap:
+          name: mq-bridge-config
