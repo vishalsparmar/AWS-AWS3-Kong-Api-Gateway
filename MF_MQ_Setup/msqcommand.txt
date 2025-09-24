@@ -1,0 +1,141 @@
+# =================================================================
+# MQSC Commands for EKS MQ Queue Manager
+# =================================================================
+
+# 1. Create Transmission Queue for sending to Mainframe
+DEFINE QLOCAL(XMIT.TO.MAINFRAME) +
+       USAGE(XMITQ) +
+       DESCR('Transmission queue to Mainframe QM') +
+       MAXDEPTH(50000) +
+       MAXMSGL(4194304)
+
+# 2. Create Sender Channel to Mainframe
+DEFINE CHANNEL(TO.MAINFRAME.QM) +
+       CHLTYPE(SDR) +
+       CONNAME('mainframe-hostname(1414)') +
+       XMITQ(XMIT.TO.MAINFRAME) +
+       DESCR('Sender channel to Mainframe') +
+       MCAUSER('mquser') +
+       HEARTINT(300) +
+       BATCHSZ(50) +
+       SHORTRTY(10) +
+       SHORTTMR(60) +
+       LONGRTY(999999999) +
+       LONGTMR(1200)
+
+# 3. Create Receiver Channel from Mainframe
+DEFINE CHANNEL(FROM.MAINFRAME.QM) +
+       CHLTYPE(RCVR) +
+       DESCR('Receiver channel from Mainframe') +
+       MCAUSER('mquser') +
+       HEARTINT(300)
+
+# 4. Create local queues for receiving messages
+DEFINE QLOCAL(APP.REQUEST.QUEUE) +
+       DESCR('Queue for receiving requests from Mainframe') +
+       MAXDEPTH(50000) +
+       MAXMSGL(4194304)
+
+DEFINE QLOCAL(APP.REPLY.QUEUE) +
+       DESCR('Queue for application replies') +
+       MAXDEPTH(50000) +
+       MAXMSGL(4194304)
+
+# 5. Create Remote Queue Definitions pointing to Mainframe queues
+DEFINE QREMOTE(MAINFRAME.APP.QUEUE) +
+       RNAME(MAINFRAME.LOCAL.QUEUE) +
+       RQMNAME(MAINFRAME.QM) +
+       XMITQ(XMIT.TO.MAINFRAME) +
+       DESCR('Remote queue on Mainframe')
+
+# 6. Start the sender channel
+START CHANNEL(TO.MAINFRAME.QM)
+
+# =================================================================
+# MQSC Commands for Mainframe Queue Manager  
+# =================================================================
+
+# 1. Create Transmission Queue for sending to EKS
+DEFINE QLOCAL(XMIT.TO.EKS) +
+       USAGE(XMITQ) +
+       DESCR('Transmission queue to EKS QM') +
+       MAXDEPTH(50000) +
+       MAXMSGL(4194304)
+
+# 2. Create Sender Channel to EKS
+DEFINE CHANNEL(FROM.MAINFRAME.QM) +
+       CHLTYPE(SDR) +
+       CONNAME('eks-mq-service.namespace.svc.cluster.local(1414)') +
+       XMITQ(XMIT.TO.EKS) +
+       DESCR('Sender channel to EKS') +
+       MCAUSER('MQUSER') +
+       HEARTINT(300) +
+       BATCHSZ(50) +
+       SHORTRTY(10) +
+       SHORTTMR(60) +
+       LONGRTY(999999999) +
+       LONGTMR(1200)
+
+# 3. Create Receiver Channel from EKS
+DEFINE CHANNEL(TO.MAINFRAME.QM) +
+       CHLTYPE(RCVR) +
+       DESCR('Receiver channel from EKS') +
+       MCAUSER('MQUSER') +
+       HEARTINT(300)
+
+# 4. Create local queues for receiving messages
+DEFINE QLOCAL(MAINFRAME.LOCAL.QUEUE) +
+       DESCR('Queue for receiving messages from EKS') +
+       MAXDEPTH(50000) +
+       MAXMSGL(4194304)
+
+DEFINE QLOCAL(MAINFRAME.REPLY.QUEUE) +
+       DESCR('Queue for replies to EKS') +
+       MAXDEPTH(50000) +
+       MAXMSGL(4194304)
+
+# 5. Create Remote Queue Definitions pointing to EKS queues
+DEFINE QREMOTE(EKS.APP.QUEUE) +
+       RNAME(APP.REQUEST.QUEUE) +
+       RQMNAME(EKS.QM) +
+       XMITQ(XMIT.TO.EKS) +
+       DESCR('Remote queue on EKS')
+
+# 6. Start the sender channel
+START CHANNEL(FROM.MAINFRAME.QM)
+
+# =================================================================
+# Additional Configuration Commands (Both Sides)
+# =================================================================
+
+# Check channel status
+DISPLAY CHSTATUS(TO.MAINFRAME.QM)
+DISPLAY CHSTATUS(FROM.MAINFRAME.QM)
+
+# Check queue depths
+DISPLAY QUEUE(XMIT.TO.MAINFRAME) CURDEPTH
+DISPLAY QUEUE(XMIT.TO.EKS) CURDEPTH
+
+# Ping channel test
+PING CHANNEL(TO.MAINFRAME.QM)
+
+# =================================================================
+# Security Configuration (Optional - if SSL/TLS required)
+# =================================================================
+
+# For SSL/TLS, modify channels with:
+# ALTER CHANNEL(TO.MAINFRAME.QM) +
+#       CHLTYPE(SDR) +
+#       SSLCIPH(TLS_RSA_WITH_AES_256_CBC_SHA256) +
+#       SSLCAUTH(OPTIONAL)
+
+# =================================================================
+# Environment-Specific Notes:
+# =================================================================
+
+# 1. Replace 'mainframe-hostname' with actual mainframe IP/hostname
+# 2. Replace 'eks-mq-service.namespace.svc.cluster.local' with actual EKS service endpoint
+# 3. Adjust MCAUSER values based on your security requirements
+# 4. Modify queue names to match your application requirements
+# 5. For EKS, you might need to use LoadBalancer service or NodePort for external connectivity
+# 6. Ensure firewall rules allow port 1414 traffic between systems
