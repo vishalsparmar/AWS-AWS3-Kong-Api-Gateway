@@ -13,15 +13,19 @@ We will configure matching Sender/Receiver channels for communication with MFQMG
 2. Connection Details
 Please confirm the IP address and port we should use to connect to MFQMGR.
 Can MFQMGR connect outbound to our EKS QMgr (EKSQMGR) on port 1414?
-3. Security
+3. Transmission Queue
+What XMITQ name will you define on MFQMGR for sending messages to EKSQMGR?
+Do you have a preferred naming convention (e.g., <RemoteQMgr>.XMITQ)?
+Should we follow the same convention on EKSQMGR when defining the XMITQ for MFQMGR?
+4. Security
 Is TLS required on these channels? If yes:
 Which CipherSpec should we configure?
 Do we need to exchange certificates?
 Are there any CHLAUTH/RACF rules that we should account for (to allow EKSQMGR to connect)?
-4. Queue Mappings
+5. Queue Mappings
 Which queues on MFQMGR should we send messages to?
 Which queues on EKSQMGR should we expose for MFQMGR to send to?
-5. Queue Manager Details
+6. Queue Manager Details
 Please confirm the exact name of the mainframe QMgr (for RQMNAME).
 Once we have this information, we’ll finalize the EKS side Sender/Receiver channel setup, transmission queues, and remote/local queues.
 Thanks,
