@@ -75,3 +75,29 @@ DISPLAY CHSTATUS(channelname) ALL
 DISPLAY QSTATUS(SYSTEM.CHANNEL.INITQ)
 
 
+HA *****************************************HA pod affinity ******************************
+
+HA *****************************************HA pod affinity ******************************
+
+controller:
+  replicas: 3
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - argo-workflows-controller
+          topologyKey: "topology.kubernetes.io/zone"
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: argo-workflows-controller
+
+
+HA *****************************************HA pod affinity END ******************************
