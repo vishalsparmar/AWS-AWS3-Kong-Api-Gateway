@@ -1,0 +1,23 @@
+controller:
+  replicas: 3
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - argo-workflows-controller
+          topologyKey: "topology.kubernetes.io/zone"
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: argo-workflows-controller
+
+# Optional: Enable persistence for workflow data if desired
+persistence:
+  enabled: false
