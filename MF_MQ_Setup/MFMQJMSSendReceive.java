@@ -2,6 +2,8 @@ import com.ibm.mq.jms.MQQueueConnectionFactory;
 import com.ibm.msg.client.wmq.common.CommonConstants;
 import javax.jms.*;
 
+//apt-get update && apt-get install -y openjdk-17-jdk && apt-get clean
+
 public class MainframeMQDirectClient {
 
     public static void main(String[] args) throws JMSException {
