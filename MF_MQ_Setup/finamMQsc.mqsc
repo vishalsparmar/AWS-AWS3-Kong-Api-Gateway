@@ -23,3 +23,27 @@ DEFINE CHANNEL('QM1.SVRCONN') CHLTYPE(SVRCONN) TRPTYPE(TCP)
 START CHANNEL('TO.MFQM.SDR')
 
 * (Ensure your apps put messages to TO.MF.QUEUE; they'll be delivered to DEST.QUEUE.ON.MF on MFQM)
+
+
+
+******************************************
+Replace the following:
+
+'TO.MF.QUEUE': name of the alias queue on your QM1.
+
+'DEST.QUEUE.ON.MF': name of the queue on the mainframe you want to send to.
+
+'MFQM': name of the mainframe queue manager.
+
+'TO.MFQM': name of your transmission queue.
+
+'TO.MFQM.SDR': sender channel name in your EKS QM.
+
+'mainframe.host.com(1414)': mainframe host/IP and listener port.
+
+'mfuser': user ID authorized on mainframe (optional; depends on mainframe security setup).
+
+Notes:
+
+This script is run via MQSC (i.e., runmqsc QM1 < yourscript.mqsc).
+**************************************
