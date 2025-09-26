@@ -1,0 +1,25 @@
+* Define a remote queue pointing to a mainframe queue
+DEFINE QREMOTE('TO.MF.QUEUE') +
+  RNAME('DEST.QUEUE.ON.MF') +
+  RQMNAME('MFQM') +
+  XMITQ('TO.MFQM')
+
+* Define the transmission queue (local queue used for sending messages to MF)
+DEFINE QLOCAL('TO.MFQM') USAGE(XMITQ)
+
+* Define a sender channel from your QM1 to mainframe MFQM
+DEFINE CHANNEL('TO.MFQM.SDR') +
+  CHLTYPE(SDR) +
+  TRPTYPE(TCP) +
+  CONNAME('mainframe.host.com(1414)') +
+  XMITQ('TO.MFQM') +
+  * Optional: Set MCAUSER if needed for mainframe authentication
+  MCAUSER('mfuser')
+
+* (Optional—if your apps connect using client connection, define SVRCONN if needed for local app)
+DEFINE CHANNEL('QM1.SVRCONN') CHLTYPE(SVRCONN) TRPTYPE(TCP)
+
+* Start the sender channel
+START CHANNEL('TO.MFQM.SDR')
+
+* (Ensure your apps put messages to TO.MF.QUEUE; they'll be delivered to DEST.QUEUE.ON.MF on MFQM)
