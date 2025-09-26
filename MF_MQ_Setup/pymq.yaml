@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mq-python-bridge
+  labels:
+    app: mq-python-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mq-python-bridge
+  template:
+    metadata:
+      labels:
+        app: mq-python-bridge
+    spec:
+      containers:
+        - name: python-bridge
+          image: <your-docker-repo>/mq-python-bridge:latest
+          env:
+            # Mainframe MQ connection
+            - name: MQ_HOST
+              value: "10.10.10.5"
+            - name: MQ_PORT
+              value: "1414"
+            - name: MQ_QMGR
+              value: "MFQMGR"
+            - name: MQ_CHANNEL
+              value: "APP.SVRCONN"
+            - name: MQ_USER
+              value: "userid"
+            - name: MQ_PASSWORD
+              value: "password"
+
+            # Queue names
+            - name: LOCAL_SEND_QUEUE
+              value: "MF.APP.OUT"
+            - name: LOCAL_RECV_QUEUE
+              value: "MF.APP.IN"
+            - name: REMOTE_SEND_QUEUE
+              value: "APP.REQ.Q"
+            - name: REMOTE_RECV_QUEUE
+              value: "APP.RECV.Q"
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+          imagePullPolicy: Always
