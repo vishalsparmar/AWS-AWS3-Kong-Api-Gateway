@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # MQ JMS Compile and Run with JMS API
+#apt-get update && apt-get install -y vim-tiny && apt-get clean
+
 MQ_JAR="com.ibm.mq.allclient-9.3.4.1.jar"
 JMS_JAR="javax.jms-api-2.0.1.jar"
 MAIN_CLASS=${1:-"MyMQClient"}
