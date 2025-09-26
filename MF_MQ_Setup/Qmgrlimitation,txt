@@ -1,0 +1,43 @@
+Why You Can Send But Not Receive:
+Sending (from EKS QMGR to mainframe):
+
+Your EKS queue manager acts as a client or creates a sender channel (from itself, via SVRCONN, to the mainframe).
+
+You define a remote queue and XMIT queue that forwards any message placed on the local (alias) queue to the mainframe’s queue, using the available SVRCONN/channel/port.
+
+This all happens from your side; no changes needed on mainframe, because you’re pushing messages out via the provided “doorway” (SVRCONN).
+
+Why You CANNOT "Receive" in the same way:
+
+The MQ architecture is asymmetric for bridges:
+
+Moving a message from your QMGR to mainframe: All forwarding config happens in your QMGR (with remote queue/XMITQ/sender channel).
+
+Moving a message from mainframe to your QMGR: This would require the mainframe to have a remote queue, its own XMIT queue, and a sender channel pointing at your QMGR.
+
+You cannot make changes on the mainframe.
+
+There’s no way for your EKS QMGR to “pull” messages out of the mainframe’s queues by itself; MQ is not a peer-to-peer file server or pull-based protocol.
+
+Only MQ client applications (not queue managers) can connect via SVRCONN and “get” messages directly from a remote queue.
+
+Analogy:
+Sending messages:
+You’re dropping letters into a mailbox (mainframe queue) that’s open for you.
+
+Receiving messages:
+Only the mailbox owner (mainframe admin) can set up a courier/bridge to drop letters in your box; you can’t reach into their box without their cooperation, unless you act as a “visitor” (client) and pull messages out manually via an app.
+
+Summary Table
+Direction	How it works	What’s required
+EKS → Mainframe	Remote queues/XMITQs in EKS QMGR, using mainframe’s SVRCONN	No mainframe changes
+Mainframe → EKS	Mainframe must create sender channel and remote queue	Requires mainframe changes
+EKS MQ Client → Mainframe	MQ client process connects via SVRCONN, reads messages	No mainframe changes, but this is not "queue manager bridge"
+Bottom line:
+
+Sending: Possible via bridge/alias config because you control your side.
+
+Receiving: Not possible as a queue manager bridge without mainframe changes; only possible with an app acting as an MQ client.
+
+If you need code or setup for that MQ client "puller", let me know!
+
