@@ -11,3 +11,12 @@ telemetry_endpoint - Where data plane sends metrics and telemetry
 control_plane_endpoint - Where data plane connects for configuration
 cluster_certificate and cluster_certificate_key - For mTLS authentication
 
+
+
+@JmsListener(destination = "your-queue-name")
+    public void handleMessage(Message message) {
+        // Spring handles threading automatically
+        // No blocking - health checks always work
+
+
+        @Scheduled(fixedDelay = 100) // Check every 100ms
