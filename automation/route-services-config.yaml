@@ -1,0 +1,44 @@
+control_plane_id: "your-control-plane-id"
+region: "us"  # or "eu", "au"
+services:
+  - name: "user-service"
+    host: "users.api.company.com"
+    port: 443
+    protocol: "https"
+    path: "/users"
+    tags: ["users", "backend"]
+    routes:
+      - name: "users-route"
+        paths: ["/users", "/api/users"]
+        methods: ["GET", "POST"]
+        strip_path: true
+        tags: ["users"]
+      
+      - name: "users-by-id-route"  
+        paths: ["/users/(?<id>\\d+)"]
+        methods: ["GET", "PUT", "DELETE"]
+        strip_path: false
+
+  - name: "product-service"
+    host: "products.internal.com"
+    port: 80
+    protocol: "http"
+    path: "/products"
+    tags: ["products", "catalog"]
+    routes:
+      - name: "products-route"
+        paths: ["/products", "/api/products"]
+        methods: ["GET"]
+        strip_path: true
+
+  - name: "auth-service"
+    host: "auth.service.com"
+    port: 443
+    protocol: "https"
+    path: "/auth"
+    tags: ["auth", "security"]
+    routes:
+      - name: "auth-route"
+        paths: ["/auth", "/login", "/logout"]
+        methods: ["POST"]
+        strip_path: false
